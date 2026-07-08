@@ -325,40 +325,44 @@ if start2:
                 y_offset += text_height + 2 * background_margin
 
 
-    with st.spinner("Paste to template..."):
-        category_dict = {}
-        image_paths = []
+# 1. Initialize an empty ZIP archive in memory first
+    zip_buffer = BytesIO()
+    preview_shown = False
 
-        for index, row in selected_df.iterrows():
-            img_template = add_image(row['Link'], row)
-            draw = ImageDraw.Draw(img_template)
-            add_text(img_template, draw, row, font, selectprice)
+    with st.spinner("Generating and Zipping Photos..."):
+        # Open the zip file in write mode using standard compression (ZIP_DEFLATED)
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
             
+            for index, row in selected_df.iterrows():
+                # Generate the image image
+                img_template = add_image(row['Link'], row)
+                draw = ImageDraw.Draw(img_template)
+                add_text(img_template, draw, row, font, selectprice)
+                
+                # Save the image to a temporary single-use buffer
+                buf = BytesIO()
 
-            buf = BytesIO()
-            img_template.save(buf, format='PNG')
-            buf.seek(0)
-            file_name = f"{row['ItemCode']}.jpg"
-            image_paths.append((file_name, buf.getvalue()))
-            category = row['List']
-            if category not in category_dict:
-                category_dict[category] = []
-            category_dict[category].append((file_name, buf.getvalue()))
+                # FIX: Convert from RGBA to RGB right before saving as JPEG
+                rgb_template = img_template.convert("RGB")
+                rgb_template.save(buf, format='JPEG', quality=85) 
 
-        if image_paths:
-            st.image(image_paths[0][1])
-    with st.spinner("Create Zip File..."):
-        # Membuat ZIP file dengan struktur folder berdasarkan kategori
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for category, files in category_dict.items():
-                for file_name, image_data in files:
-                    file_path = f"{category}/{file_name}"  # Menyimpan gambar dalam folder kategori
-                    zipf.writestr(file_path, image_data)
+                img_bytes = buf.getvalue()
+                # Show only the very first image as a preview so the user knows it works
+                if not preview_shown:
+                    st.image(img_bytes, caption="First image preview")
+                    preview_shown = True
+                
+                # Write the image straight into the ZIP file structure
+                category = row['List'] if pd.notna(row['List']) else "Uncategorized"
+                file_path = f"{category}/{row['ItemCode']}.jpg"
+                zipf.writestr(file_path, img_bytes)
+                
+                # Automatically forgets 'img_bytes' and 'img_template' on the next loop iteration, freeing RAM!
 
+        # Rewind the ZIP buffer pointer to the beginning so it can be read for download
         zip_buffer.seek(0)
 
-        # Tombol download ZIP
+        # 2. Display the download button
         st.download_button(
             label="Download ZIP",
             data=zip_buffer,
