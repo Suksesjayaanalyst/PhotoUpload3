@@ -51,8 +51,10 @@ def get_data_from_google():
         return database, catalogue
     
 
-st.session_state.database = get_data_from_google()[0]
-st.session_state.catalogue = get_data_from_google()[1]
+if 'database' not in st.session_state or 'catalogue' not in st.session_state:
+    db, cat = get_data_from_google()
+    st.session_state.database = db
+    st.session_state.catalogue = cat
 
 database = st.session_state.database
 file_catalogue = st.session_state.catalogue
@@ -227,13 +229,13 @@ if start2:
             return wrapped_text.splitlines()
 
         
-        def add_image(img_url, row):
-
+        # FIX 2: Added session context down to connection layer
+        def add_image(img_url, row, session_obj):
             try:
-                template = Image.new("RGBA", (800, 1200), "white")  # Menambahkan warna RGB pada background
-                response = requests.get(img_url)
+                template = Image.new("RGBA", (800, 1200), "white")  
+                response = session_obj.get(img_url, timeout=15)
                 img = Image.open(BytesIO(response.content)).convert("RGBA")
-                img = img.resize ((750,750))
+                img = img.resize((750,750))
                 image_x = (template.width - img.width) // 2
                 image_y = 25
                 if row['U_Kategori'] == 'AKSESORIS RAMBUT KAMINO':
@@ -254,10 +256,10 @@ if start2:
                 template.paste(img, (image_x, image_y))
 
             except Exception as e:
-                st.error(f"Error loadingimage: {e} {row['ItemCode']}")
+                st.error(f"Error loading image: {e} {row['ItemCode']}")
 
             return template
-        
+
         def add_text(template, draw, row, font, selectprice):
             item_code = row['ItemCode']
             item_name = row['ItemName']
@@ -330,39 +332,44 @@ if start2:
     preview_shown = False
 
     with st.spinner("Generating and Zipping Photos..."):
-        # Open the zip file in write mode using standard compression (ZIP_DEFLATED)
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            
-            for index, row in selected_df.iterrows():
-                # Generate the image image
-                img_template = add_image(row['Link'], row)
-                draw = ImageDraw.Draw(img_template)
-                add_text(img_template, draw, row, font, selectprice)
-                
-                # Save the image to a temporary single-use buffer
-                buf = BytesIO()
+        # FIX 3: Added a live counter UI layout to track items processed
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_items = len(selected_df)
 
-                # FIX: Convert from RGBA to RGB right before saving as JPEG
-                rgb_template = img_template.convert("RGB")
-                rgb_template.save(buf, format='JPEG', quality=85) 
-
-                img_bytes = buf.getvalue()
-                # Show only the very first image as a preview so the user knows it works
-                if not preview_shown:
-                    st.image(img_bytes, caption="First image preview")
-                    preview_shown = True
+        # FIX 4: Implemented reusable requests connection engine
+        with requests.Session() as session:
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
                 
-                # Write the image straight into the ZIP file structure
-                category = row['List'] if pd.notna(row['List']) else "Uncategorized"
-                file_path = f"{category}/{row['ItemCode']}.jpg"
-                zipf.writestr(file_path, img_bytes)
-                
-                # Automatically forgets 'img_bytes' and 'img_template' on the next loop iteration, freeing RAM!
+                for idx, (index, row) in enumerate(selected_df.iterrows()):
+                    # Dynamic user updates
+                    status_text.text(f"Processing item {idx + 1} of {total_items}: {row['ItemCode']}")
+                    progress_bar.progress((idx + 1) / total_items)
 
-        # Rewind the ZIP buffer pointer to the beginning so it can be read for download
+                    img_template = add_image(row['Link'], row, session)
+                    draw = ImageDraw.Draw(img_template)
+                    add_text(img_template, draw, row, font, selectprice)
+                    
+                    buf = BytesIO()
+                    rgb_template = img_template.convert("RGB")
+                    rgb_template.save(buf, format='JPEG', quality=85) 
+
+                    img_bytes = buf.getvalue()
+                    if not preview_shown:
+                        st.image(img_bytes, caption="First image preview")
+                        preview_shown = True
+                    
+                    category = row['List'] if pd.notna(row['List']) else "Uncategorized"
+                    file_path = f"{category}/{row['ItemCode']}.jpg"
+                    zipf.writestr(file_path, img_bytes)
+
+        # Clean old progress modules off the UI
+        progress_bar.empty()
+        status_text.empty()
+        st.success("All images processed successfully!")
+
         zip_buffer.seek(0)
 
-        # 2. Display the download button
         st.download_button(
             label="Download ZIP",
             data=zip_buffer,
