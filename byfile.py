@@ -156,7 +156,23 @@ photo = st.file_uploader("Upload your Photo", type=["jpg", "jpeg", "png"], key="
 if photo:
     # Pilihan untuk memilih harga dan itemcode
     selectprice = st.selectbox("Choose", options=['Harga Under', 'HargaLusin', 'HargaSpecial'])
-    itemcode = st.selectbox("ItemCode", options=catalogue['ItemCode'].unique())
+    search = st.text_input("Search Key ItemCode")
+    itemcode = None  # Initialize
+    if search:
+        matches = (
+            st.session_state.catalogue.loc[
+                st.session_state.catalogue["ItemCode"].astype(str).str.contains(search, case=False, na=False),
+                "ItemCode",
+            ]
+            .drop_duplicates()
+            .sort_values()
+            .head(50)
+            .tolist()
+        )
+        if matches:
+            itemcode = st.selectbox("Matching ItemCodes", matches)
+        else:
+            st.info("No matching ItemCode found.")
     start = st.button("Start")
     file_user = catalogue[catalogue['ItemCode'] == itemcode]
 
